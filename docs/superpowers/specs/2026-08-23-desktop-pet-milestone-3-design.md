@@ -49,7 +49,7 @@ PetVitals.advance(elapsedMs, context) accepts IDLE, WALKING, or SLEEPING:
 
 All rates and thresholds are held in one PetBalanceConfig object:
 
-- initialStats: hunger 82, mood 84, energy 78, intimacy 20
+- initialStats: hunger 82, mood 85, energy 78, intimacy 60
 - hungerDecayPerHour: 4
 - activeEnergyDecayPerHour: 12
 - sleepEnergyRecoveryPerHour: 20
@@ -93,38 +93,55 @@ Milestone 3 does not create ad-hoc persistence. M5 can pass a saved timestamp an
 
 ## State machine integration
 
-Add vitals as a transition reason while keeping the existing states and debug shortcuts.
+Add vitals and user-interrupt as transition reasons while keeping the existing states and debug shortcuts. Reserve a public PetRuntime.forceWake() method for user interruption; the current sleeping click will use it, and future AI/dialogue interactions can call the same method.
 
 During a normal vitals tick:
 
 - If energy <= sleepThreshold, no drag/interaction is active, and state is IDLE or WALKING, request SLEEPING.
 - Sleeping applies recovery. A sleep session entered below wakeThreshold is armed to wake at wakeThreshold.
 - A manually forced debug sleep entered with high energy remains available for visual testing and does not immediately auto-wake.
-- Clicking a sleeping character still requests the normal SLEEPING -> IDLE interaction transition.
+- Clicking a sleeping character calls forceWake() and requests the normal SLEEPING -> IDLE user-interrupt transition.
+- Energy never automatically starts WALKING. M3 removes the old fixed IDLE -> WALKING test timer; WALKING remains reachable through Ctrl+Alt+2 and future explicit activity/AI behavior.
 - Hunger never changes the state in this milestone.
 
 The shortcut module remains removable. It calls PetRuntime.transitionTo(), which delegates to PetStateMachine, and never writes React state or stat fields.
 
 ## Formal character asset and display metrics
 
-The supplied image is copied byte-for-byte to src/assets/characters/default/character.png. The manifest references it for the three current animations and records the shared source-canvas contract for future 1024x1200 sequences.
+The supplied image is copied byte-for-byte to src/assets/characters/default/idle/default_idle.png. The manifest references it for the three current animations and records the shared source-canvas contract for future 1024x1200 sequences. Future assets can use the clearer structure default/idle, default/walk, and default/sleep without a generic character.png name.
 
 Centralized display inputs:
 
 - defaultCharacterScale = 0.5
 - referenceCharacterSize = 238x300 logical pixels
 - referenceWindowSize = 360x420 logical pixels
+- minimumScaledWindowSize = 260x300 logical pixels
 
 Derived defaults are approximately:
 
 - character layout: 119x150 logical pixels;
-- window bootstrap/layout: 180x210 logical pixels;
+- window bootstrap/layout: 260x300 logical pixels, allowing speech, effects, controls, and future outfit affordances;
 - character and control hitboxes: actual rendered DOM rectangles;
 - cursor passthrough: those rectangles converted by the platform adapter.
 
 The raw PNG remains high-resolution. Layout width controls display size; object-fit contain and the shared canvas contract preserve frame alignment. Transparent padding remains part of the canvas and does not change the foot-center anchor.
 
-The Tauri static window size is changed to the derived bootstrap size, and the frontend applies the same metrics at runtime, avoiding a large unused 360x420 transparent window.
+The Tauri static window size is changed to 260x300, and the frontend applies the same metrics at runtime. The window is smaller than the original 360x420 but is not reduced mechanically to half, avoiding a cramped speech/control area.
+
+Sleeping does not disable interaction. The character hitbox remains present in every state, the sleeping CSS animation does not set pointer-events to none, and the platform cursor passthrough controller continues to include the character rectangle while SLEEPING.
+
+## Speech bubble controller
+
+Speech behavior is moved behind a dedicated SpeechBubbleController rather than being managed independently by each click handler or future AI feature. It owns the states hidden, showing, and fading, and exposes show(message, duration), hide(), snapshot(), and subscription methods.
+
+- Default state is hidden; the existing always-visible idle bubble is removed.
+- A local click calls show() for 3 to 5 seconds, then transitions through fading to hidden.
+- Future AI dialogue calls the same show() API.
+- Timers live inside the controller, not inside PetView. The controller accepts an injected scheduler for deterministic tests.
+
+## Deferred hide entry
+
+Milestone 3 keeps tray-only hide and recall. It does not add a character interaction menu, settings panel, or formal close/hide button. Those entry points are recorded for M4/M4.5 UI work and are intentionally not implemented here.
 
 ## Development overlay
 
@@ -140,6 +157,6 @@ DevPetOverlay is a small pointer-transparent layer shown only in development. It
 
 ## Verification plan
 
-Add tests for stats clamp, hunger decay, active energy decay, sleeping recovery, stable mood, stable intimacy, offline 30 minutes/8 hours/24 hours/7 days, hunger protection floor, sleep and wake thresholds, all time periods and boundaries, constant-time large elapsed duration, and derived 0.5 display metrics/hitbox geometry.
+Add tests for stats clamp, hunger decay, active energy decay, sleeping recovery, stable mood, stable intimacy, offline 30 minutes/8 hours/24 hours/7 days, hunger protection floor, sleep and wake thresholds, no automatic WALKING from energy, forceWake/user-interrupt behavior, all time periods and boundaries, constant-time large elapsed duration, derived 0.5 display metrics/hitbox geometry, speech bubble lifecycle, and sleeping hitbox availability.
 
 Run tsc, Vitest, Vite build, cargo fmt --check, cargo check, Tauri build, and Tauri dev. GUI verification checks the debug overlay, hunger/energy changes, sleep recovery, shortcuts, walking movement, dragging, click-through, and tray hide/show. Stop after Milestone 3.
