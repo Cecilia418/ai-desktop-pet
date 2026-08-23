@@ -108,7 +108,7 @@ The shortcut module remains removable. It calls PetRuntime.transitionTo(), which
 
 ## Formal character asset and display metrics
 
-The supplied image is copied byte-for-byte to src/assets/characters/default/idle/default_idle.png. The manifest references it for the three current animations and records the shared source-canvas contract for future 1024x1200 sequences. Future assets can use the clearer structure default/idle, default/walk, and default/sleep without a generic character.png name.
+The supplied image is copied byte-for-byte to src/assets/characters/default/idle/default_idle.png. Its verified source canvas is 1037x1156, 32bpp ARGB; it is intentionally not resampled. The manifest records that source dimensions explicitly for this single-frame asset and keeps a separate shared high-resolution canvas contract for future sequences, such as 1024x1200. Future assets can use the clearer structure default/idle, default/walk, and default/sleep without a generic character.png name.
 
 Centralized display inputs:
 
