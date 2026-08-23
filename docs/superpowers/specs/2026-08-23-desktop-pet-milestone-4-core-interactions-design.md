@@ -131,45 +131,79 @@ modules have one responsibility each:
 ## Event model
 
 The existing `PetInteractionEvent` envelope remains the common input value object.
-M4 extends its semantic type set only where the functional chat shell needs it:
+M4 extends its semantic type set only where the functional chat shell needs it, but
+it removes the generic `payload?: Record<string, unknown>` escape hatch. Each event
+has a required payload whose shape is tied to its discriminating `type`:
 
 ```ts
-type PetInteractionEventType =
-  | "CLICK"
-  | "PET"
-  | "POKE"
-  | "DRAG_START"
-  | "DRAG_MOVE"
-  | "DRAG_END"
-  | "FEED"
-  | "CHAT_START"
-  | "CHAT_SEND"
-  | "CHAT_CLOSE"
-  | "WAKE";
-```
+type PetInteractionSource = "pointer" | "keyboard" | "system" | "debug" | "ai";
+type PetInteractionRegion = "CHARACTER" | "HEAD" | "BODY";
 
-The existing envelope remains framework- and platform-independent:
-
-```ts
-interface PetInteractionEvent {
-  type: PetInteractionEventType;
+interface PetInteractionEventBase<TType, TPayload> {
+  type: TType;
   timestamp: number;
-  source: "pointer" | "keyboard" | "system" | "debug" | "ai";
-  region?: "CHARACTER" | "HEAD" | "BODY";
-  payload?: Record<string, unknown>;
+  source: PetInteractionSource;
+  payload: TPayload;
+}
+
+type PetInteractionEvent =
+  | (PetInteractionEventBase<"CLICK", {
+      region: PetInteractionRegion;
+      pointerId: number;
+      x: number;
+      y: number;
+      durationMs: number;
+      movementPx: number;
+    }> & { region: PetInteractionRegion })
+  | (PetInteractionEventBase<"PET", {
+      region: "HEAD";
+      pointerId: number;
+      x: number;
+      y: number;
+      holdDurationMs: number;
+      repeatIndex: number;
+    }> & { region: "HEAD" })
+  | (PetInteractionEventBase<"POKE", {
+      region: "HEAD" | "BODY";
+    }> & { region: "HEAD" | "BODY" })
+  | (PetInteractionEventBase<"DRAG_START", PointerDragPayload> & {
+      region: PetInteractionRegion;
+    })
+  | (PetInteractionEventBase<"DRAG_MOVE", PointerDragPayload> & {
+      region: PetInteractionRegion;
+    })
+  | (PetInteractionEventBase<"DRAG_END", PointerDragEndPayload> & {
+      region: PetInteractionRegion;
+    })
+  | PetInteractionEventBase<"FEED", { foodId: string }>
+  | PetInteractionEventBase<"CHAT_START", EmptyInteractionPayload>
+  | PetInteractionEventBase<"CHAT_SEND", { message: string }>
+  | PetInteractionEventBase<"CHAT_CLOSE", EmptyInteractionPayload>
+  | PetInteractionEventBase<"WAKE", { reason: "user-interrupt" }>;
+
+interface PointerDragPayload {
+  pointerId: number;
+  x: number;
+  y: number;
+  deltaX?: number;
+  deltaY?: number;
+}
+
+interface PointerDragEndPayload extends PointerDragPayload {
+  cancelled?: boolean;
+}
+
+interface EmptyInteractionPayload {
+  readonly kind: "empty";
 }
 ```
 
-M4 payload conventions are:
+The exact implementation may use a mapped payload map, but narrowing by
+`event.type` must narrow `event.payload` at compile time. Event factories validate
+the corresponding payload and region; callers may not construct an unrelated
+payload and cast it to the common event type.
 
-- `PET`: `holdDurationMs`, optional `repeatIndex`;
-- `CLICK`: `durationMs`, `movementPx`, and the pointer id;
-- `FEED`: `foodId`;
-- `CHAT_SEND`: trimmed `message`;
-- `CHAT_START` / `CHAT_CLOSE`: no business payload;
-- drag events: existing pointer coordinates/deltas and cancellation marker.
-
-Temporary React controls create events through a small event factory or injected
+Temporary React controls create events through the typed event factory or an injected
 callback. They do not call `runtime.vitals`, `transitionTo`, `speechBubble.show`, or
 `setPosition`.
 
@@ -199,9 +233,10 @@ Recognition rules:
 7. Pointer-up before the hold threshold emits exactly one `CLICK` when movement stayed
    below 4px. The event includes duration so the runtime can apply the short-click
    rule without duplicating pointer recognition in React.
-8. A body press does not become PET. A short body click is passed as `CLICK` and is
-   derived to BODY POKE by the runtime. A long body hold that never crossed the drag
-   threshold remains a generic CLICK and does not receive repeated PET events.
+8. A body press never becomes PET. A body release becomes POKE only when the runtime
+   receives a `CLICK` whose `durationMs` is strictly below the configured PET hold
+   threshold. A body hold at or beyond that threshold remains a generic CLICK and
+   does not become POKE or receive repeated PET events.
 9. Pointer-cancel and blur clear timers and sessions without manufacturing a click.
    An active drag still emits one `DRAG_END` with `cancelled: true`, preserving M3.5.
 
@@ -226,11 +261,16 @@ publishing snapshots, and invoking effect/reaction services.
 
 ### PET
 
-- A PET event always produces immediate PET feedback when its reaction cooldown allows.
-- Each accepted PET applies `mood +3` through `PetVitals.applyDelta`.
-- `intimacy +1` is attempted only when the separate PET reward cooldown allows it.
-- Repeated hold PET events therefore remain visibly responsive without allowing rapid
-  intimacy farming.
+- A PET event may always produce immediate visual/line feedback when its reaction
+  cooldown allows; feedback repetition is independent from stat rewards.
+- `mood +3` is attempted through `PetVitals.applyDelta` only when the separate PET
+  mood-reward cooldown allows it.
+- `intimacy +1` is attempted through the vitals API only when the separate PET
+  intimacy-reward cooldown allows it.
+- Mood and intimacy reward ledgers are independent, so one reward being blocked does
+  not implicitly block the other.
+- Repeated hold PET events therefore remain visibly responsive without applying
+  `mood +3` or `intimacy +1` on every repeat.
 
 ### POKE
 
@@ -262,7 +302,13 @@ publishing snapshots, and invoking effect/reaction services.
 `FEED` carries a `foodId`, which is looked up in the immutable local test catalog.
 Unknown ids are rejected without changing stats.
 
-For a known food:
+For a known food, first compare the current hunger with `fullThreshold`:
+
+- if `hunger >= fullThreshold`, return only the `FULL` reaction/effect decision;
+  do not increase hunger, mood, or intimacy, and do not run the normal food effect;
+- otherwise, continue with the normal food rules below.
+
+For a non-full pet:
 
 - `hunger` applies the food's `hungerRestore` through `PetVitals.applyDelta` and is
   clamped to the existing maximum of 100;
@@ -271,9 +317,8 @@ For a known food:
   relationship reward cooldown allows it;
 - NORMAL foods do not grant intimacy;
 - DISLIKE foods do not reduce intimacy;
-- when hunger was already at or above the configured full threshold (95), the pet can
-  still show a refusal reaction and the normal hunger/mood rules, but no intimacy
-  reward is granted.
+- `FULL` is the only full-hunger outcome, preventing repeated feeding at the cap from
+  farming hunger, mood, or intimacy.
 
 The three initial definitions are centralized and intentionally provisional:
 
@@ -344,7 +389,8 @@ interface InteractionBalanceConfig {
     moodDelta: number;             // +3
     intimacyDelta: number;         // +1
     reactionCooldownMs: number;    // approximately 800
-    statRewardCooldownMs: number;  // approximately 10_000
+    moodRewardCooldownMs: number;  // independent mood limit
+    intimacyRewardCooldownMs: number; // approximately 10_000
   };
   poke: {
     reactionCooldownMs: number;
@@ -371,8 +417,9 @@ The existing `InteractionCooldownManager` remains dedicated to immediate reactio
 feedback. Add a separate reward/effect cooldown ledger for stat rewards. The two
 ledgers must have independent keys and timestamps:
 
-- PET reaction cooldown does not block the required PET mood application decision;
-- PET reward cooldown blocks only the intimacy increment;
+- PET reaction cooldown does not block the rule from evaluating mood/intimacy rewards;
+- PET mood reward cooldown blocks only the mood increment;
+- PET intimacy reward cooldown blocks only the intimacy increment;
 - FEED reaction cooldown does not block hunger/mood application;
 - FEED intimacy cooldown blocks only the relationship increment;
 - POKE annoyed mood cooldown prevents rapid mood collapse;
@@ -452,6 +499,11 @@ transparent pet window:
 - opens `FeedChooser` or `ChatPanel` in the same window;
 - does not create a new Tauri window, tray entry, formal menu, or keyboard shortcut;
 - does not enlarge the Tauri window;
+- every menu, chooser, panel, button, bubble, and hit target is rendered inside the
+  current Tauri window's physical viewport; no portal, popup, fixed-position element,
+  or DOM hit target may extend outside that viewport;
+- when a panel is open it occupies/overlays space inside the existing window and may
+  temporarily cover part of the character; it must be clipped to the window bounds;
 - uses simple component-local CSS only, with no future Design System primitives;
 - can temporarily add its own DOM interactive region to cursor passthrough while open;
 - returns passthrough geometry to the character-only region after close.
@@ -466,11 +518,13 @@ The exception is presentation-only menu state (`collapsed`, `activePanel`, and i
 text). That state does not represent PetState, PetStats, interaction rewards, or
 desktop position. All pet consequences still pass through `PetRuntime`.
 
-Because the existing window stays compact, the menu must remain small and its opened
-panel must not cover the character hitbox unnecessarily. Cursor passthrough receives
-the union of the rendered character region and the currently visible temporary panel
-region; when the panel closes, the provider returns only the rendered character
-region. Character geometry continues to come from the actual rendered DOM rectangle.
+Because the existing window stays compact, the menu must remain small. An opened
+panel may occupy the window's internal space rather than expanding the desktop
+window. Cursor passthrough receives the union of the rendered character region and
+the currently visible, viewport-clamped temporary panel region; when the panel closes,
+the provider returns only the rendered character region. Character geometry continues
+to come from the actual rendered DOM rectangle. No interaction depends on DOM that is
+outside the Tauri window.
 
 ## Chat service seam
 
@@ -505,8 +559,10 @@ of scope for M4.
 
 Character `HEAD`/`BODY` regions continue to resolve from the actual rendered character
 rectangle in `interactionGeometry`. The temporary menu contributes only its own
-visible DOM rectangle to the cursor-passthrough provider; it does not introduce a
-second character hitbox.
+viewport-clamped DOM rectangle to the cursor-passthrough provider; it does not
+introduce a second character hitbox. The root layout is clipped to the current
+window's physical/logical viewport, and the menu never relies on an outside portal or
+outside-window hit target.
 
 Windows behavior remains behind `DesktopWindowManager`:
 
@@ -541,20 +597,25 @@ Add focused tests while preserving all M3 regression tests.
 - a HEAD hold at the configured threshold emits PET;
 - continued hold repeats PET at the configured interval, not per frame;
 - release after PET emits no CLICK;
-- body hold never emits PET;
+- body hold never emits PET or POKE;
+- a body POKE is produced only when runtime accepts a CLICK with
+  `durationMs < pet.holdThresholdMs`;
 - exact 4px movement starts one drag;
 - drag cancels PET and never emits CLICK;
 - pointer cancel clears timers and does not create a click.
 
 ### InteractionRules / balance
 
-- PET returns mood +3 and a separately gateable intimacy reward;
+- repeated PET feedback can repeat while mood and intimacy rewards are independently
+  cooldown-gated;
+- PET mood and intimacy reward cooldowns do not share an accidental timestamp;
 - HEAD and BODY clicks resolve different POKE feedback keys;
 - the third POKE in a 5-second session can become annoyed;
 - POKE never changes intimacy;
 - food definitions return the configured hunger/mood/preference behavior;
 - hunger clamps at 100;
-- full hunger prevents feed intimacy growth;
+- full hunger produces only FULL reaction/effect and changes no hunger, mood, or
+  intimacy;
 - DISLIKE does not reduce intimacy;
 - all decisions use centralized configuration.
 
@@ -580,6 +641,7 @@ Add focused tests while preserving all M3 regression tests.
 - a one-frame animation can receive configured fallback motion;
 - local chat provider returns a response without network access;
 - temporary menu emits events and does not call business mutations directly;
+- every temporary UI rectangle is inside the current Tauri window viewport;
 - opening/closing the temporary panel changes passthrough regions without changing
   the character geometry.
 
@@ -597,7 +659,7 @@ Run `pnpm tauri dev` and manually verify:
 8. The `M4 TEMP` entry opens the temporary chooser without a new window.
 9. Strawberry, rice ball, and carrot change hunger and reactions according to their
    definitions.
-10. Feeding at full hunger still reacts but does not keep granting intimacy.
+10. Feeding at full hunger produces only FULL feedback/effect and changes no stats.
 11. The temporary chat panel opens, accepts input, displays the local placeholder
     response, and shows it through the shared bubble.
 12. Chat close works and no network request is made.
