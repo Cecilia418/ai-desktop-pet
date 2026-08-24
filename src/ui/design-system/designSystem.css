@@ -1,0 +1,241 @@
+.ui-button {
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  padding: 6px 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.1;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) ease-out,
+    border-color var(--motion-fast) ease-out,
+    box-shadow var(--motion-fast) ease-out,
+    color var(--motion-fast) ease-out;
+}
+
+.ui-button:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.ui-button:active {
+  box-shadow: none;
+}
+
+.ui-button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+}
+
+.ui-button:disabled {
+  cursor: default;
+  opacity: 0.52;
+  box-shadow: none;
+}
+
+.ui-button--primary {
+  background: var(--color-primary);
+  color: #fffdf8;
+}
+
+.ui-button--primary:hover {
+  background: var(--color-primary-deep);
+}
+
+.ui-button--soft {
+  border-color: var(--color-border);
+  background: var(--color-primary-soft);
+}
+
+.ui-button--soft:hover {
+  border-color: var(--color-primary);
+  background: #e7f0d3;
+}
+
+.ui-button--ghost {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+
+.ui-button--ghost:hover {
+  background: var(--color-surface-secondary);
+}
+
+.ui-button--quiet {
+  min-width: 30px;
+  padding-inline: 8px;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.ui-button--quiet:hover {
+  background: var(--color-surface-secondary);
+  color: var(--color-text-primary);
+}
+
+.ui-button--danger {
+  background: #f5d4d6;
+  color: #713f48;
+}
+
+.ui-button--danger:hover {
+  background: #edc0c5;
+}
+
+.ui-button__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.ui-card,
+.ui-panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.ui-card {
+  padding: var(--spacing-md);
+}
+
+.ui-card--blue,
+.ui-panel--blue {
+  background: #edf8fb;
+}
+
+.ui-card--yellow,
+.ui-panel--yellow {
+  background: #fff9e8;
+}
+
+.ui-card--pink,
+.ui-panel--pink {
+  background: #fff3f6;
+}
+
+.ui-card--sage,
+.ui-panel--sage {
+  background: #f2f8e8;
+}
+
+.ui-panel {
+  padding: var(--spacing-md);
+}
+
+.ui-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.ui-panel-header__copy {
+  min-width: 0;
+}
+
+.ui-panel-header h2 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.ui-panel-header p {
+  margin: 4px 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+}
+
+.ui-panel-header__close {
+  flex: 0 0 auto;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.ui-divider {
+  width: 100%;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.ui-progress {
+  width: 100%;
+}
+
+.ui-progress__track {
+  display: block;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: #ebe7dc;
+}
+
+.ui-progress__value {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width var(--motion-fast) ease-out;
+}
+
+.ui-progress--primary .ui-progress__value {
+  background: var(--color-primary);
+}
+
+.ui-progress--yellow .ui-progress__value {
+  background: var(--color-accent-yellow);
+}
+
+.ui-progress--blue .ui-progress__value {
+  background: var(--color-accent-blue-deep);
+}
+
+.ui-progress--pink .ui-progress__value {
+  background: var(--color-accent-pink-deep);
+}
+
+.ui-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: var(--radius-pill);
+  padding: 3px 8px;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.ui-status-chip--primary {
+  background: var(--color-primary-soft);
+  color: #547137;
+}
+
+.ui-status-chip--yellow {
+  background: #fcedbd;
+  color: #7b6431;
+}
+
+.ui-status-chip--blue {
+  background: #d9eff5;
+  color: #4a6e78;
+}
+
+.ui-status-chip--pink {
+  background: #f8dce5;
+  color: #8a5262;
+}
+
+.ui-popover {
+  position: absolute;
+  z-index: 8;
+}
