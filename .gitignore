@@ -25,6 +25,13 @@ src-tauri/target/
 *.db
 *.db-wal
 *.db-shm
+.tauri/
+.release/
+release/
+*.key
+*.key.pub
+*.pem
+*.sig
 
 # Editor directories and files
 .vscode/*

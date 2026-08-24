@@ -388,6 +388,51 @@
   line-height: 1.6;
 }
 
+.pet-settings-update {
+  display: grid;
+  gap: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--spacing-md);
+}
+
+.pet-settings-version,
+.pet-settings-update__available,
+.pet-settings-update__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.pet-settings-version {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.pet-settings-version strong {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pet-settings-update__available {
+  align-items: flex-start;
+  flex-direction: column;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.pet-settings-update__message {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.pet-settings-update__actions {
+  justify-content: flex-end;
+}
+
 .pet-chat-panel {
   display: flex;
   flex-direction: column;

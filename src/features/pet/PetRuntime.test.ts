@@ -112,6 +112,43 @@ describe("PetRuntime", () => {
     runtime.dispose();
   });
 
+  it("uses saved WALKING activity for offline context but starts the new runtime idle", async () => {
+    const frameCallbacks: Array<(timestamp: number) => void> = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: (timestamp: number) => void) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const { manager } = createWindowManager();
+    const repository: PetPersistenceRepository = {
+      load: vi.fn(async () => ({
+        stats: { hunger: 82, mood: 85, energy: 78, intimacy: 60 },
+        lastRuntimeTimestamp: 1_700_000_000_000,
+        lastActivity: "WALKING" as const,
+        position: null,
+      })),
+      save: vi.fn(async () => undefined),
+    };
+    const persistenceService = new PetPersistenceService({ repository });
+    const runtime = new PetRuntime({
+      character: getCharacterDefinition(),
+      windowManager: manager,
+      now: () => 1_700_000_000_000 + 30 * 60 * 1_000,
+      persistenceService,
+    });
+
+    await runtime.initialize();
+
+    expect(runtime.snapshot.state).toBe("IDLE");
+    expect(runtime.snapshot.animation.animationName).toBe("idle");
+    expect(runtime.movementDebugSnapshot.movementActive).toBe(false);
+    expect(frameCallbacks).toHaveLength(1);
+
+    await runtime.shutdown();
+    runtime.dispose();
+  });
+
   it("wakes from sleeping through the normal state transition", () => {
     const { manager } = createWindowManager();
     const runtime = new PetRuntime({

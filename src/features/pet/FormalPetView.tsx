@@ -38,6 +38,13 @@ import { SpeechBubble } from "../../ui/pet/SpeechBubble";
 import { SettingsPanel } from "../../ui/pet/SettingsPanel";
 import { FeedPanel } from "../../ui/feeding/FeedPanel";
 import { ChatPanel } from "../../ui/chat/ChatPanel";
+import { getAppVersion } from "../../platform/update/appVersion";
+import { createDefaultUpdateAdapter } from "../../platform/update/tauriUpdateAdapter";
+import { UpdateService } from "../../platform/update/updateService";
+import type {
+  ResumeAfterUpdatePreparation,
+  UpdateSnapshot,
+} from "../../platform/update/updateTypes";
 import "./FormalPetView.css";
 
 interface FormalPetViewProps {
@@ -97,6 +104,27 @@ export function FormalPetView({
   const geometryRegistry = useMemo(
     () => new InteractiveGeometryRegistry(),
     [],
+  );
+  const prepareForUpdateRef = useRef<
+    (() => Promise<ResumeAfterUpdatePreparation | void>) | null
+  >(null);
+  const updateService = useMemo(
+    () =>
+      new UpdateService({
+        adapter: createDefaultUpdateAdapter(),
+        getCurrentVersion: getAppVersion,
+        prepareForInstall: () =>
+          prepareForUpdateRef.current?.() ?? Promise.resolve(),
+        onError: (error) => {
+          if (import.meta.env.DEV) {
+            console.error("Updater error", error);
+          }
+        },
+      }),
+    [],
+  );
+  const [updateSnapshot, setUpdateSnapshot] = useState<UpdateSnapshot>(
+    updateService.snapshot,
   );
 
   const closeActionMenu = useCallback(() => {
@@ -176,9 +204,9 @@ export function FormalPetView({
   );
 
   const transitionWindow = useCallback(
-    (mode: PetWindowMode) => {
+    (mode: PetWindowMode, rethrow = false): Promise<void> => {
       runtime.setCompactPositionPersistenceEnabled(false);
-      void layoutCoordinator
+      return layoutCoordinator
         .transitionTo(mode, {
           requestMode: setWindowMode,
           setTransitioning: (transitioning) => {
@@ -192,14 +220,48 @@ export function FormalPetView({
         .then(() => {
           runtime.setCompactPositionPersistenceEnabled(mode === "pet-only");
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           setWindowError("暂时无法调整桌面窗口布局");
           setLayoutTransitioning(false);
           runtime.setMovementPaused(false);
+          if (rethrow) {
+            throw error;
+          }
         });
     },
     [layoutCoordinator, runtime],
   );
+
+  const prepareForUpdate = useCallback(async () => {
+    if (runtime.snapshot.interaction.activeInteraction === "DRAG") {
+      throw new Error("正在拖动桌面女儿，请稍后再更新");
+    }
+
+    closeActionMenu();
+    panelCoordinator.close();
+    runtime.setPresentationActive(false);
+    runtime.setMovementPaused(true, true);
+    layoutCoordinator.invalidatePendingTransition();
+    setLayoutTransitioning(false);
+
+    try {
+      await transitionWindow("pet-only", true);
+      runtime.setCompactPositionPersistenceEnabled(true);
+      runtime.setMovementPaused(true, true);
+      await runtime.flushPersistenceForUpdate();
+      return () => runtime.setMovementPaused(false);
+    } catch (error) {
+      runtime.setMovementPaused(false);
+      throw error;
+    }
+  }, [
+    closeActionMenu,
+    layoutCoordinator,
+    panelCoordinator,
+    runtime,
+    transitionWindow,
+  ]);
+  prepareForUpdateRef.current = prepareForUpdate;
 
   const openPanel = useCallback(
     (panel: Exclude<ActivePanel, null>) => {
@@ -350,7 +412,7 @@ export function FormalPetView({
         : actionMenuOpen
           ? "action-menu"
           : "pet-only";
-    transitionWindow(nextMode);
+    void transitionWindow(nextMode);
   }, [
     actionMenuOpen,
     panelSnapshot.activePanel,
@@ -439,6 +501,25 @@ export function FormalPetView({
     const unsubscribe = chatService.subscribe(setChatSnapshot);
     return unsubscribe;
   }, [chatService]);
+
+  useEffect(() => {
+    const unsubscribe = updateService.subscribe(setUpdateSnapshot);
+    void updateService.initialize();
+    return () => {
+      unsubscribe();
+      updateService.dispose();
+    };
+  }, [updateService]);
+
+  useEffect(() => {
+    if (!ready) {
+      return;
+    }
+    const timer = globalThis.setTimeout(() => {
+      void updateService.checkForUpdate();
+    }, 3_500);
+    return () => globalThis.clearTimeout(timer);
+  }, [ready, updateService]);
 
   useEffect(() => {
     if (!ready) {
@@ -745,7 +826,13 @@ export function FormalPetView({
           />
         ) : null}
         {activePanel === "settings" ? (
-          <SettingsPanel panelRef={panelRef} onClose={handlePanelClose} />
+          <SettingsPanel
+            panelRef={panelRef}
+            onClose={handlePanelClose}
+            updateSnapshot={updateSnapshot}
+            onCheckUpdate={() => void updateService.checkForUpdate()}
+            onInstallUpdate={() => void updateService.installAvailable()}
+          />
         ) : null}
         {activePanel === "chat" ? (
           <ChatPanel

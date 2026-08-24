@@ -242,6 +242,64 @@ mod tests {
         assert!(validate_state(&state).is_err());
     }
 
+    #[test]
+    fn persisted_pet_state_survives_a_simulated_version_restart() {
+        let database = tempfile::NamedTempFile::new().expect("temporary database");
+        let state = sample_state();
+
+        {
+            let mut connection = Connection::open(database.path()).expect("old connection");
+            migrate(&mut connection).expect("old migration");
+            connection
+                .execute(
+                    "INSERT INTO pet_state (
+                        id, hunger, mood, energy, intimacy, last_runtime_timestamp,
+                        last_activity, position_x, position_y, updated_at
+                     ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+                    params![
+                        state.stats.hunger,
+                        state.stats.mood,
+                        state.stats.energy,
+                        state.stats.intimacy,
+                        state.last_runtime_timestamp,
+                        state.last_activity,
+                        state.position.as_ref().map(|position| position.x),
+                        state.position.as_ref().map(|position| position.y),
+                    ],
+                )
+                .expect("save old state");
+        }
+
+        let mut connection = Connection::open(database.path()).expect("new connection");
+        migrate(&mut connection).expect("new migration");
+        let restored: PersistedPetState = connection
+            .query_row(
+                "SELECT hunger, mood, energy, intimacy, last_runtime_timestamp,
+                        last_activity, position_x, position_y
+                 FROM pet_state WHERE id = 1",
+                [],
+                |row| {
+                    Ok(PersistedPetState {
+                        stats: PersistedStats {
+                            hunger: row.get(0)?,
+                            mood: row.get(1)?,
+                            energy: row.get(2)?,
+                            intimacy: row.get(3)?,
+                        },
+                        last_runtime_timestamp: row.get(4)?,
+                        last_activity: row.get(5)?,
+                        position: Some(PersistedPosition {
+                            x: row.get(6)?,
+                            y: row.get(7)?,
+                        }),
+                    })
+                },
+            )
+            .expect("restore new state");
+
+        assert_eq!(restored, state);
+    }
+
     fn expect_table(connection: &Connection, name: &str) {
         let exists: i64 = connection
             .query_row(

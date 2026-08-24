@@ -327,6 +327,14 @@ export class PetRuntime {
     }
   }
 
+  /** Flushes durable state without tearing down the running desktop pet. */
+  public async flushPersistenceForUpdate(): Promise<void> {
+    if (!this.persistenceService || !this.persistenceReady) {
+      return;
+    }
+    await this.persistenceService.flush(this.buildPersistedState());
+  }
+
   public setCompactPositionPersistenceEnabled(enabled: boolean): void {
     if (this.compactPositionPersistenceEnabled === enabled) {
       return;
