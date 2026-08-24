@@ -250,8 +250,10 @@ The coordinator guarantees:
 PetView continues to collect raw pointer samples. InteractionController still
 decides CLICK, PET, POKE, and drag events. The event dispatcher sends the
 resulting PetInteractionEvent to PetRuntime first. A separate presentation
-observer may react to a CLICK by opening the action menu, but it must not
-replace or bypass the runtime event.
+observer may close the action menu in response to PET, POKE, or DRAG_START, but
+it must never open the action menu from a character CLICK. M4 defines a short
+character click as POKE, so the same gesture must never produce both POKE and
+an action-menu open.
 
 ## Formal pet action menu
 
@@ -265,14 +267,28 @@ Default state:
 - the existing speech bubble appears only when SpeechBubbleController says it
   should.
 
-After a character CLICK:
+The action menu is opened only by an independent presentation affordance. The
+first version uses a small '•••' / circular button near the character. It is
+shown on character hover or keyboard focus, remains outside the character
+button's interaction geometry, and has its own registered DOM rect. Activating
+that button opens the action menu; activating the character still follows the
+M4 interaction semantics:
 
-- show one small floating action bar near the character;
-- keep it inside the current Tauri window;
-- avoid covering the face when the available geometry allows it;
-- provide primary actions for Feed and Chat;
-- provide an overflow action for Status, Hide, and the small Settings shell;
-- use text plus consistent SVG/project icons, with aria-labels on every
+    short click HEAD/BODY -> POKE only
+    long press HEAD       -> PET
+    movement past 4px      -> DRAG
+    '•••' affordance       -> presentation ActionMenu open
+
+The affordance and action menu must remain inside the current Tauri window.
+The affordance is intentionally small enough that it does not become a
+permanent toolbar or alter the default pet-first composition.
+
+When open, the action menu:
+
+- stays near the character without covering the face when possible;
+- provides primary actions for Feed and Chat;
+- provides an overflow action for Status, Hide, and the small Settings shell;
+- uses text plus consistent SVG/project icons, with aria-labels on every
   control.
 
 The action bar is a presentation affordance. Feed, Chat, Status, Hide, and
@@ -286,6 +302,25 @@ Settings are routed as follows:
 Hide must call DesktopWindowManager.hide through an injected adapter or
 coordinator. It must not set DOM display or alter PetState.
 
+### ActionMenu lifecycle
+
+ActionMenu presentation state is independent from PetState and has a centrally
+configured inactivity timeout, initially 5,000ms (within the required 4–6
+second range). The menu closes when:
+
+- any action is selected;
+- a major panel opens;
+- PET, POKE, or DRAG_START is recognized;
+- the Hide action succeeds or is requested;
+- the host window emits a reliable blur event;
+- the inactivity timer expires.
+
+Every affordance/menu interaction resets the timer. Do not rely on
+click-outside: transparent click-through areas may deliver the click to the
+desktop instead of the WebView. An optional blur listener is additive; the
+timer and explicit lifecycle events remain authoritative when platform blur is
+unavailable.
+
 ## Status UI
 
 PetStatusPanel is a compact in-window panel. It shows only:
@@ -298,20 +333,20 @@ It must never render intimacy, an intimacy label, or an intimacy numeric value.
 The panel consumes the published PetRuntime snapshot and uses a pure
 presentation mapping module. The mapping does not mutate PetVitals:
 
-    hunger 80..100 -> 吃得饱饱的
-    hunger 50..79  -> 还不错
-    hunger 20..49  -> 有点饿
-    hunger 0..19   -> 肚子空空的
+    hunger >= 80 -> 吃得饱饱的
+    hunger >= 50 -> 还不错
+    hunger >= 20 -> 有点饿
+    otherwise    -> 肚子空空的
 
-    mood 80..100 -> 很开心
-    mood 50..79  -> 心情不错
-    mood 20..49  -> 有点闷
-    mood 0..19   -> 不太开心
+    mood >= 80 -> 很开心
+    mood >= 50 -> 心情不错
+    mood >= 20 -> 有点闷
+    otherwise  -> 不太开心
 
-    energy 80..100 -> 精神满满
-    energy 50..79 -> 还挺有精神
-    energy 20..49 -> 有点困
-    energy 0..19  -> 快睡着啦
+    energy >= 80 -> 精神满满
+    energy >= 50 -> 还挺有精神
+    energy >= 20 -> 有点困
+    otherwise   -> 快睡着啦
 
 The UI may show an icon, semantic text, and a progress bar. Numeric values are
 optional in this first formal presentation; if shown during implementation,
@@ -429,42 +464,58 @@ must not import @tauri-apps/api/window or call setSize/setPosition directly.
 The coordinator may use the existing DesktopWindowManager methods or extend that
 adapter with a platform-neutral layout snapshot operation.
 
-### Foot-center anchor algorithm
+### Foot-center anchor contract
 
-The primary anchor is the actual rendered character's foot-center screen
-coordinate:
+WindowLayoutCoordinator must not guess a future React rect from the current
+window size. Compact and expanded layouts share one pure
+PetWindowLayoutSpec contract, derived from the existing character display
+metrics:
 
-    footCenterLocal = {
-      x: characterRect.left + characterRect.width / 2,
-      y: characterRect.bottom
+    PetWindowLayoutSpec {
+      mode: "compact" | "chat",
+      windowSize: LogicalSize,
+      petLane: {
+        footCenterLocal: LogicalPoint
+      }
     }
 
-Before a mode change:
+The spec is the only source for the logical window sizes and stable pet-lane
+anchor. React uses it to provide CSS layout variables, and
+WindowLayoutCoordinator uses the same values for target calculations. CSS,
+React, and the platform adapter must not each maintain independent anchor
+magic numbers. The pet-lane point is a placement contract, not a second
+character hitbox; CHARACTER / HEAD / BODY still come only from the actual
+rendered DOM geometry.
 
-1. Measure the current character DOM rect. This is the same rendered geometry
-   used for CHARACTER / HEAD / BODY interaction and cursor passthrough; it is
-   not a second hitbox.
-2. Read the adapter's current logical window position, size, work area, and
-   scaleFactor.
-3. Convert the local foot-center to a screen coordinate at the current
-   scaleFactor.
-4. Select the target logical window size for compact or chat mode.
-5. Calculate the target top-left so the target layout's rendered foot-center
-   maps back to the captured screen coordinate.
-6. Apply the size and position through the adapter, in a serialized operation.
-7. Re-read the layout snapshot and make only a minimal correction if Windows
-   DPI rounding or work-area clamping introduced a measurable error.
+The preferred transition is a controlled two-phase operation:
+
+1. Capture phase: read the current character DOM rect and the adapter layout
+   snapshot. Convert the current DOM foot-center to a screen coordinate using
+   the current scaleFactor.
+2. Prepare phase: request the target mode from the presentation coordinator,
+   render the target layout using the shared PetWindowLayoutSpec, and hold a
+   short layout-transition lock so an intermediate resize frame is not visible.
+3. Measure phase: after React layout has committed and ResizeObserver has
+   settled, read the actual target character DOM rect. Use its measured
+   foot-center local value, with the shared pet-lane value as the expected
+   contract, to calculate the target top-left.
+4. Commit phase: apply target logical size and target physical position through
+   one serialized adapter operation. The platform adapter may choose the safe
+   order for Windows, but the transition lock stays active until both complete.
+5. Verify phase: read the layout snapshot again and make at most a minimal
+   correction for DPI rounding or work-area clamping, then release the lock.
+
+If a platform can prove the shared pet-lane contract is exact for a layout,
+the measure phase may be a verification-only pass. It must still be available
+for content-driven layout changes. The lock prevents a resize intermediate
+frame from showing the character at an incorrect screen position; it is not a
+large animation.
 
 All UI dimensions remain logical pixels. Physical screen coordinates are used
-only inside the platform/layout boundary. The coordinator must prefer preserving
-the foot-center over centering the new window. If the work area makes exact
-preservation impossible, clamp by the smallest necessary displacement and keep
-the character visible.
-
-The expanded template keeps a stable pet lane so the character does not jump
-because a percentage-based center changes when the window grows. The extra
-expanded area is allocated to the panel side and/or above the character. The
-actual rendered DOM rect remains the only source of character hit geometry.
+only inside the platform/layout boundary. The coordinator must prefer
+preserving the captured foot-center over centering the new window. If the work
+area makes exact preservation impossible, clamp by the smallest necessary
+displacement and keep the character visible.
 
 Transitions are serialized. A second request waits for or supersedes the
 previous layout request according to the latest activePanel mode; stale
@@ -474,23 +525,52 @@ reposition results must not move the window after Chat has already closed.
 
 The existing CursorPassthroughController remains the platform bridge.
 
-Interactive regions are derived from current DOM rects:
+Add a unified InteractiveGeometryRegistry for all visible interactive DOM
+elements. It owns registration, unregistration, cached logical rects, and
+refresh notifications:
+
+    register("character", characterElement)
+    register("affordance", affordanceElement)
+    register("action-menu", actionMenuElement)
+    register("panel", activePanelElement)
+
+The registry uses ResizeObserver (or an equivalent platform-safe observer) on
+each registered element and refreshes after:
+
+- element resize;
+- window resize or compact/expanded mode change;
+- panel open/close and panel transition;
+- content height changes, including transcript growth and validation/error
+  messages;
+- a DPI scale-factor change or a fresh platform cursor snapshot.
+
+The observer updates the cached rect and requests CursorPassthroughController
+to recompute its current ignore/interactive state from the latest snapshot.
+The cursor controller must retain the last cursor snapshot so a geometry
+refresh works even when the physical pointer has not moved. A cursor event may
+also request a fresh registry read; no stale cache may be used after a
+refresh.
+
+Interactive regions are derived from the registry's current DOM rects:
 
 - character button rect;
+- the independent affordance rect when visible;
 - action menu rect when visible;
 - the one active panel rect when visible;
 - any visible modal/close control contained in that panel.
 
-When a panel closes, its region is removed immediately. The expanded window's
-otherwise transparent area remains click-through. The root remains clipped to
-the physical Tauri window and panels may not rely on DOM rendered outside that
-window for input.
+When a panel or affordance closes, its registration is removed immediately.
+The expanded window's otherwise transparent area remains click-through. The
+root remains clipped to the physical Tauri window and panels may not rely on
+DOM rendered outside that window for input.
 
 Character geometry rules remain unchanged:
 
 - actual rendered character DOM geometry is the source of CHARACTER, HEAD, and
   BODY regions;
 - the same geometry feeds InteractionController and cursor passthrough;
+- ResizeObserver refreshes this same character rect; it never creates a
+  parallel character geometry record;
 - window resizing changes the coordinate transform, not the hitbox definition;
 - no alpha-pixel hitbox or parallel character-size table is introduced.
 
@@ -541,7 +621,13 @@ Add behavior tests; do not assert implementation-specific pixel styling.
 
 ### Action menu
 
-- a character click opens the formal action menu;
+- the independent affordance opens the formal action menu;
+- a short character click still emits POKE and does not open ActionMenu;
+- PET, POKE, and DRAG_START close ActionMenu;
+- selecting an action closes ActionMenu;
+- the configured 4–6 second inactivity timeout closes ActionMenu;
+- reliable blur closes ActionMenu when available;
+- no click-outside behavior is required for transparent desktop areas;
 - Feed opens FeedPanel;
 - Chat emits CHAT_START and opens ChatPanel;
 - Status opens the status presentation;
@@ -553,6 +639,7 @@ Add behavior tests; do not assert implementation-specific pixel styling.
 - hunger mapping is correct at all range boundaries;
 - mood mapping is correct at all range boundaries;
 - energy mapping is correct at all range boundaries;
+- mapping uses floating-point-safe descending >= threshold checks;
 - intimacy is never rendered in the production status tree.
 
 ### Feed
@@ -574,11 +661,16 @@ Add behavior tests; do not assert implementation-specific pixel styling.
 ### Layout and passthrough
 
 - compact and chat mode use the same Tauri window;
+- both modes consume the same PetWindowLayoutSpec pet-lane contract;
+- the controlled resize -> measure -> reposition path does not expose an
+  intermediate character jump;
 - foot-center anchor remains stable across enter/exit within the tolerance
   permitted by logical-to-physical DPI rounding;
 - expanded transparent regions remain click-through;
 - visible panel rects are included;
 - closed panel rects are removed;
+- geometry refreshes after resize, panel transition, content height change,
+  and DPI scale-factor change even when the pointer is stationary;
 - character geometry is unchanged as the hitbox source;
 - drag, PET, POKE, sleeping wake, and movement pause behavior do not regress.
 
