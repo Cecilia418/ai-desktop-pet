@@ -1,7 +1,7 @@
 # Milestone 6 — AI Provider & DeepSeek Integration Design
 
 Date: 2026-08-24  
-Status: awaiting user review; implementation has not started
+Status: revised and approved for implementation
 
 ## Scope
 
@@ -13,7 +13,8 @@ without changing the pet's core life loop:
 - a provider abstraction that can later support another provider, streaming,
   or thinking mode without changing `ChatPanel` or `ChatService` boundaries;
 - secure Windows API-key storage behind a Rust/Tauri command boundary;
-- short current-session context for multi-turn chat;
+- short current-session context for multi-turn chat, retained in memory while
+  the app is running even when ChatPanel is closed;
 - complete AI responses in `ChatPanel` and a short presentation through the
   existing `SpeechBubbleController`;
 - typed provider/application errors, timeout, cancellation, and stale-response
@@ -160,11 +161,20 @@ and provider implementation behind the same abstraction.
 
 ### Storage
 
-Use a maintained OS credential/keyring abstraction with a Windows Credential
-Manager backend. The application-level namespace is stable and provider-scoped
-so it does not depend on the current executable path or installer location.
-The logical entry is the DeepSeek API key for application id
-`com.momdaughter.desktop`.
+Use `keyring` crate `4.1.6` with its `v1` API and the native Windows backend
+`windows-native-keyring-store` `1.1.0`. On Windows this backend is the Windows
+Credential Manager. Use `secrecy` crate `0.10.3` for the in-process
+`SecretString` wrapper. These versions are recorded as the M6 implementation
+contract and must be pinned in `Cargo.lock`.
+
+The Windows build enables only the native credential-store path needed by the
+application; it does not enable `db-keystore` or any file-backed fallback. If
+Windows Credential Manager is unavailable, the application returns a typed
+credential-store error and refuses to save/use the key. It never falls back to
+`pet.db`, an ordinary file, JSON, or another plaintext store. The
+application-level namespace is stable and provider-scoped so it does not
+depend on the current executable path or installer location. The logical entry
+is the DeepSeek API key for application id `com.momdaughter.desktop`.
 
 The key is never stored in:
 
@@ -178,6 +188,14 @@ The Rust command accepts the key only for the save operation. On successful
 save, the Settings input is cleared immediately. A temporary show/hide toggle
 is permitted before save; after save the UI displays only `已配置`.
 
+Every raw key in Rust is represented as `secrecy::SecretString`. The secret
+wrapper is not `Debug`, not `Serialize`, and is not included in command DTOs
+returned to the frontend. It is never logged. The only `ExposeSecret` scope is
+the smallest Rust request scope that constructs the `Authorization` header;
+the header/request is not logged and is dropped after the request future
+completes. Keyring reads convert the returned temporary `String` into
+`SecretString` immediately. No raw key is retained in application state.
+
 ### Tauri commands
 
 The command DTOs are typed and provider-scoped. The planned command surface is:
@@ -186,9 +204,9 @@ The command DTOs are typed and provider-scoped. The planned command surface is:
 - `ai_save_api_key` → accepts a transient secret and returns only success or a
   sanitized error;
 - `ai_delete_api_key` → deletes the provider key;
-- `ai_test_connection` → Rust retrieves the key internally and performs the
+- `ai_test_connection(requestId)` → Rust retrieves the key internally and performs the
   minimal explicit validation request;
-- `ai_chat_completion` → Rust retrieves the key internally and sends a typed
+- `ai_chat_completion(requestId, request)` → Rust retrieves the key internally and sends a typed
   chat request.
 
 There is no `get_api_key` command. Error conversion removes authorization
@@ -212,6 +230,35 @@ result is normalized to:
 
 The frontend receives a safe status and friendly message, not raw DeepSeek
 JSON or stack traces.
+
+## Cancellation contract
+
+Cancellation has two explicitly separate layers:
+
+1. **Backend request cancellation.** Every chat/test request receives a
+   frontend-generated `requestId`. The Rust AI command layer registers that id
+   with a backend cancellation registry containing an abort handle for the
+   in-flight `reqwest` future. `ai_cancel_request(requestId)` is idempotent and
+   aborts the local request future/socket when it is still registered. The
+   registry entry is removed on success, error, or cancellation.
+2. **Logical stale-response protection.** `ChatService` increments its
+   generation/session token on close, dispose, and replacement. A response
+   carrying an old request id/generation is ignored even if the cancellation
+   command cannot reach the backend because the process is already closing or
+   the request completed concurrently.
+
+The backend abort is best-effort local HTTP cancellation; it cannot guarantee
+that DeepSeek has stopped server-side work after bytes have left the machine.
+If only the generation guard is available for a particular shutdown race, the
+state is explicitly treated as **logical cancellation only; the network
+request may continue**. Logical stale-response protection must never be
+described as guaranteed HTTP cancellation.
+
+The planned command surface therefore includes:
+
+- `ai_chat_completion(requestId, request)`;
+- `ai_test_connection(requestId)`;
+- `ai_cancel_request(requestId)`.
 
 ## Provider and application abstractions
 
@@ -257,9 +304,24 @@ Add a pure `ConversationContextBuilder` module. It creates the provider
 request from:
 
 1. one fixed, short system instruction;
-2. the current user message;
-3. at most the most recent eight current-session messages, bounded by a
-   centralized character budget of 4,000 characters.
+2. the prior current-session messages, excluding the current turn;
+3. the current user message exactly once.
+
+The request message order is a hard invariant:
+
+```text
+system instruction
+prior current-session messages (never the current turn)
+current user message exactly once
+```
+
+`ChatService` passes the snapshot's messages as `priorMessages` before adding
+the new user turn. `ConversationContextBuilder` itself appends the current
+user message exactly once and has tests that assert the count and order. The
+4,000-character budget trims the oldest prior messages first. It never trims,
+duplicates, or replaces the current user message; if the current message
+alone reaches the budget, it is still sent intact. The existing UI input limit
+keeps that case bounded.
 
 The system instruction establishes only the M6 conversational frame:
 
@@ -272,8 +334,10 @@ The system instruction establishes only the M6 conversational frame:
 
 The builder never includes SQLite data, Windows username or paths, window
 coordinates, updater keys, API keys, tray state, full pet stats, or hidden
-`intimacy` values. It never persists a transcript. Closing the app or ChatPanel
-discards the current session as in the existing M5 behavior.
+`intimacy` values. It never persists a transcript. The in-memory transcript
+and recent context survive ChatPanel close/reopen during the current process;
+app shutdown or `ChatService.dispose()` clears them. No chat data is written
+to SQLite.
 
 The context builder is the only place that decides how much session history is
 sent. It preserves the provider abstraction and prevents an unbounded
@@ -300,9 +364,14 @@ Behavior:
 - Send is disabled while `sending`;
 - `CHAT_SEND` is the only normal action that starts a remote request;
 - no startup, idle, PET, POKE, FEED, WALKING, or reminder path calls DeepSeek;
-- `AbortController` is used when the backend adapter supports cancellation;
-- `close()` and `dispose()` cancel/retire the request and clear the current
-  session as appropriate;
+- each request carries a `requestId`; `close()` calls the typed cancel command
+  and retires the request locally;
+- `CHAT_CLOSE` sets `isOpen: false`, cancels/retires any pending request, and
+  keeps `messages` and recent context in memory;
+- reopening ChatPanel shows the same current-process transcript and continues
+  the same context;
+- `dispose()` is the app-shutdown boundary: it cancels/retires pending work,
+  clears messages/context, and releases listeners;
 - a monotonically increasing generation id ignores a late response from a
   closed/replaced session;
 - no automatic retry loop is added; the user can retry after a transient
@@ -356,7 +425,8 @@ The client maps at least these categories:
 | `NETWORK` | DNS/connectivity failure | 现在网络连不上 |
 | `TIMEOUT` | 45-second deadline | 回复等太久了，再试一次吧 |
 | `RATE_LIMIT` | HTTP 429 | 请求太频繁了，稍后再试 |
-| `PROVIDER_ERROR` | HTTP 400/402/422/500/503 | AI 服务暂时不可用 |
+| `INSUFFICIENT_BALANCE` | HTTP 402 | DeepSeek API 余额不足，请充值后再试 |
+| `PROVIDER_ERROR` | HTTP 400/422/500/503 | AI 服务暂时不可用 |
 | `INVALID_RESPONSE` | malformed/missing response fields | AI 回复格式异常，请再试一次 |
 | `EMPTY_RESPONSE` | empty content | 没有收到有效回复，请再试一次 |
 | `CANCELLED` | close/dispose/abort | request is silently retired |
@@ -435,18 +505,22 @@ secret field.
 - provider configuration contains the approved base URL, endpoint, model,
   explicit disabled thinking, `stream: false`, timeout, and no legacy model
   names;
-- `ConversationContextBuilder` includes system/current/recent messages,
-  trims old messages at the limit, and excludes SQLite/stat/secret data;
+- `ConversationContextBuilder` emits system → prior messages → current user,
+  includes the current user exactly once, trims only the oldest prior messages
+  at the limit, and excludes SQLite/stat/secret data;
 - `LocalPlaceholderChatProvider` produces typed `NOT_CONFIGURED` behavior;
 - configured provider resolution chooses DeepSeek only when the safe status is
   configured and otherwise chooses local fallback;
 - ChatService appends a successful response and preserves full transcript;
 - duplicate Send is blocked while pending;
 - missing-key guidance is surfaced without a network call;
-- response, authentication, network, timeout, rate-limit, provider, invalid,
-  empty, cancelled, and stale-response cases are normalized;
+- response, authentication, network, timeout, rate-limit, insufficient-balance,
+  provider, invalid, empty, cancelled, and stale-response cases are normalized;
 - close/dispose cancels or retires pending work and late responses cannot
-  overwrite a new session;
+  overwrite a new session; tests distinguish backend abort from logical-only
+  cancellation;
+- close/reopen retains the in-memory transcript and context, while dispose
+  clears it;
 - AI responses do not change `hunger`, `mood`, `energy`, `intimacy`, or pet
   state;
 - bubble text formatting keeps short replies and truncates long replies in a
@@ -457,6 +531,12 @@ secret field.
 ### Rust unit coverage
 
 - mock secure store save/has/delete behavior;
+- the production secure-store dependency is `keyring 4.1.6` with
+  `windows-native-keyring-store 1.1.0`; Windows uses Credential Manager and
+  no file-backed fallback is available;
+- `secrecy 0.10.3::SecretString` has no Debug/Serialize path in command DTOs,
+  is not logged, and is exposed only while constructing the Authorization
+  header;
 - no raw-key Tauri read command exists;
 - DeepSeek request serialization includes the required explicit fields;
 - response parsing rejects malformed, missing, non-string, and empty content;
@@ -487,12 +567,16 @@ After implementation, Windows verification will cover:
 7. an explicit chat sends one complete DeepSeek response using the approved
    model and displays it in ChatPanel plus the existing speech bubble;
 8. pending state disables repeat Send;
-9. offline, timeout, authentication, rate-limit, malformed-response, and
-   recovery behavior is user-readable;
+9. offline, timeout, authentication, rate-limit, insufficient-balance,
+   malformed-response, and recovery behavior is user-readable;
 10. delete returns Chat to unconfigured guidance;
-11. closing ChatPanel/app retires the request and a stale response cannot
-    mutate a new session;
-12. updater Settings, install/update data preservation, hide/tray, and
+11. closing ChatPanel cancels/retires the request but preserves the current
+    transcript; reopening continues the same in-memory context;
+12. app shutdown clears the in-memory transcript and no transcript appears in
+    SQLite;
+13. a stale response cannot mutate a new session, and diagnostics distinguish
+    logical-only cancellation from backend abort;
+14. updater Settings, install/update data preservation, hide/tray, and
     walking behavior have no regression.
 
 Required command checks remain:
