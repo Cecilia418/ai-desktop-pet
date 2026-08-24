@@ -1,3 +1,4 @@
+mod ai;
 mod persistence;
 mod platform;
 
@@ -25,6 +26,7 @@ fn save_pet_state(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(ai::AiBackend::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -40,7 +42,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             load_pet_state,
-            save_pet_state
+            save_pet_state,
+            ai::ai_get_configuration_status,
+            ai::ai_save_api_key,
+            ai::ai_delete_api_key,
+            ai::ai_test_connection,
+            ai::ai_chat_completion,
+            ai::ai_cancel_request
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

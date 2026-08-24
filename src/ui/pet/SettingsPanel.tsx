@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useState, type RefObject } from "react";
 import {
   Button,
   Panel,
@@ -7,6 +7,7 @@ import {
   StatusChip,
 } from "../design-system";
 import type { UpdateSnapshot } from "../../platform/update/updateTypes";
+import type { AiConfigurationSnapshot } from "../../platform/ai/aiTypes";
 
 export function SettingsPanel({
   panelRef,
@@ -14,18 +15,47 @@ export function SettingsPanel({
   updateSnapshot,
   onCheckUpdate,
   onInstallUpdate,
+  aiSnapshot,
+  onSaveAiKey,
+  onDeleteAiKey,
+  onTestAiConnection,
 }: {
   readonly panelRef: RefObject<HTMLDivElement | null>;
   readonly onClose: () => void;
   readonly updateSnapshot: UpdateSnapshot;
   readonly onCheckUpdate: () => void;
   readonly onInstallUpdate: () => void;
+  readonly aiSnapshot: AiConfigurationSnapshot;
+  readonly onSaveAiKey: (apiKey: string) => Promise<boolean>;
+  readonly onDeleteAiKey: () => Promise<boolean>;
+  readonly onTestAiConnection: () => Promise<boolean>;
 }) {
+  const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
   const busy = updateSnapshot.status === "checking" ||
     updateSnapshot.status === "downloading" ||
-    updateSnapshot.status === "installing";
+    updateSnapshot.status === "installing" ||
+    aiSnapshot.status === "saving" ||
+    aiSnapshot.status === "deleting" ||
+    aiSnapshot.status === "testing";
   const canInstall = updateSnapshot.status === "available" ||
     updateSnapshot.status === "ready";
+  const aiStatusLabel = aiSnapshot.status === "loading"
+    ? "读取中…"
+    : !aiSnapshot.storageAvailable
+      ? "不可用"
+      : aiSnapshot.configured
+        ? "已配置"
+        : "未配置";
+  const aiStatusTone = aiSnapshot.configured ? "primary" : "yellow";
+
+  const saveAiKey = async () => {
+    const saved = await onSaveAiKey(apiKey);
+    if (saved) {
+      setApiKey("");
+      setShowApiKey(false);
+    }
+  };
 
   return (
     <div ref={panelRef} className="pet-panel-shell pet-panel-shell--settings">
@@ -38,6 +68,67 @@ export function SettingsPanel({
         <p className="pet-settings-copy">
           这里会在后续版本加入可调节的桌宠偏好。
         </p>
+        <div className="pet-settings-ai" aria-label="AI 服务">
+          <div className="pet-settings-version">
+            <span>AI 服务</span>
+            <StatusChip tone={aiStatusTone}>{aiStatusLabel}</StatusChip>
+          </div>
+          <p className="pet-settings-ai__provider">DeepSeek</p>
+          <label className="pet-settings-ai__field">
+            <span>API Key</span>
+            <input
+              type={showApiKey ? "text" : "password"}
+              value={apiKey}
+              autoComplete="new-password"
+              placeholder={aiSnapshot.configured ? "已配置，输入新 Key 可替换" : "粘贴 DeepSeek API Key"}
+              disabled={busy || !aiSnapshot.storageAvailable}
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+          </label>
+          <div className="pet-settings-ai__actions">
+            <Button
+              type="button"
+              variant="quiet"
+              disabled={busy || apiKey === "" || !aiSnapshot.storageAvailable}
+              onClick={() => setShowApiKey((value) => !value)}
+            >
+              {showApiKey ? "隐藏" : "显示"}
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              disabled={busy || apiKey.trim() === "" || !aiSnapshot.storageAvailable}
+              onClick={() => void saveAiKey()}
+            >
+              保存
+            </Button>
+            {aiSnapshot.configured ? (
+              <Button
+                type="button"
+                variant="quiet"
+                disabled={busy}
+                onClick={() => void onDeleteAiKey()}
+              >
+                删除
+              </Button>
+            ) : null}
+            {aiSnapshot.configured ? (
+              <Button
+                type="button"
+                variant="soft"
+                disabled={busy}
+                onClick={() => void onTestAiConnection()}
+              >
+                {aiSnapshot.status === "testing" ? "验证中…" : "测试"}
+              </Button>
+            ) : null}
+          </div>
+          {aiSnapshot.message ? (
+            <p className="pet-settings-ai__message" role="status" aria-live="polite">
+              {aiSnapshot.message}
+            </p>
+          ) : null}
+        </div>
         <div className="pet-settings-update" aria-label="软件更新">
           <div className="pet-settings-version">
             <span>当前版本</span>

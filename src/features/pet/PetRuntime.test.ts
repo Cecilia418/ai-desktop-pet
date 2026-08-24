@@ -521,7 +521,7 @@ describe("PetRuntime", () => {
     runtime.dispose();
   });
 
-  it("opens local chat and keeps chat interactions out of stats", async () => {
+  it("opens chat without a configured provider and keeps chat out of stats", async () => {
     const { manager } = createWindowManager();
     const runtime = new PetRuntime({
       character: getCharacterDefinition(),
@@ -549,8 +549,9 @@ describe("PetRuntime", () => {
 
     expect(runtime.chat.snapshot.messages).toEqual([
       { role: "user", text: "妈妈今天好累" },
-      { role: "assistant", text: "妈妈，我现在还在学习怎么和你聊天呢～" },
     ]);
+    expect(runtime.chat.snapshot.errorCode).toBe("NOT_CONFIGURED");
+    expect(runtime.chat.snapshot.error).toBe("还没有配置 AI 服务哦～");
     expect(runtime.snapshot.stats).toEqual(before);
 
     runtime.handleInteraction(

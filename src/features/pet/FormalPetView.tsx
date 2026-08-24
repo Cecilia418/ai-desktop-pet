@@ -41,6 +41,7 @@ import { ChatPanel } from "../../ui/chat/ChatPanel";
 import { getAppVersion } from "../../platform/update/appVersion";
 import { createDefaultUpdateAdapter } from "../../platform/update/tauriUpdateAdapter";
 import { UpdateService } from "../../platform/update/updateService";
+import type { AiConfigurationSnapshot } from "../../platform/ai/aiTypes";
 import type {
   ResumeAfterUpdatePreparation,
   UpdateSnapshot,
@@ -65,9 +66,13 @@ export function FormalPetView({
     character,
     speechBubble,
     chatService,
+    aiConfiguration,
   } = usePetRuntime(characterId);
   const [bubbleSnapshot, setBubbleSnapshot] = useState(speechBubble.snapshot);
   const [chatSnapshot, setChatSnapshot] = useState(chatService.snapshot);
+  const [aiConfigurationSnapshot, setAiConfigurationSnapshot] = useState<
+    AiConfigurationSnapshot
+  >(aiConfiguration.snapshot);
   const [devOverlayVisible, setDevOverlayVisible] = useState(false);
   const [windowError, setWindowError] = useState<string | null>(null);
   const [windowMode, setWindowMode] = useState<PetWindowMode>("pet-only");
@@ -282,6 +287,24 @@ export function FormalPetView({
     );
     panelCoordinator.close();
   }, [dispatchInteraction, panelCoordinator]);
+
+  const openSettingsFromChat = useCallback(() => {
+    closeChat();
+    openPanel("settings");
+  }, [closeChat, openPanel]);
+
+  const saveAiKey = useCallback(
+    (apiKey: string) => aiConfiguration.saveApiKey(apiKey),
+    [aiConfiguration],
+  );
+  const deleteAiKey = useCallback(
+    () => aiConfiguration.deleteApiKey(),
+    [aiConfiguration],
+  );
+  const testAiConnection = useCallback(
+    () => aiConfiguration.testConnection(),
+    [aiConfiguration],
+  );
 
   const hidePet = useCallback(async () => {
     if (import.meta.env.DEV) {
@@ -501,6 +524,11 @@ export function FormalPetView({
     const unsubscribe = chatService.subscribe(setChatSnapshot);
     return unsubscribe;
   }, [chatService]);
+
+  useEffect(() => {
+    const unsubscribe = aiConfiguration.subscribe(setAiConfigurationSnapshot);
+    return unsubscribe;
+  }, [aiConfiguration]);
 
   useEffect(() => {
     const unsubscribe = updateService.subscribe(setUpdateSnapshot);
@@ -832,6 +860,10 @@ export function FormalPetView({
             updateSnapshot={updateSnapshot}
             onCheckUpdate={() => void updateService.checkForUpdate()}
             onInstallUpdate={() => void updateService.installAvailable()}
+            aiSnapshot={aiConfigurationSnapshot}
+            onSaveAiKey={saveAiKey}
+            onDeleteAiKey={deleteAiKey}
+            onTestAiConnection={testAiConnection}
           />
         ) : null}
         {activePanel === "chat" ? (
@@ -840,6 +872,7 @@ export function FormalPetView({
             panelRef={panelRef}
             onEvent={dispatchInteraction}
             onClose={closeChat}
+            onOpenSettings={openSettingsFromChat}
           />
         ) : null}
 

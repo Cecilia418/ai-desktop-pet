@@ -42,11 +42,24 @@ const privateKeyMarkers = [
   "BEGIN OPENSSH PRIVATE KEY",
   "BEGIN EC PRIVATE KEY",
 ];
-const suspiciousFiles = [];
-const scanRoots = [path.join(root, "dist")];
-for (const scanRoot of scanRoots) {
+const suspiciousFiles = new Set();
+const legacyModelFiles = new Set();
+const scanRoots = [
+  path.join(root, "src"),
+  path.join(root, "src-tauri", "src"),
+  path.join(root, "dist"),
+  path.join(root, "src-tauri", "target"),
+];
+const secretPatterns = [
+  /(?:^|[^A-Z0-9_])DEEPSEEK_API_KEY(?:[^A-Z0-9_]|$)/i,
+  /Authorization\s*[:=]\s*["'`]?\s*Bearer\b/i,
+  /\bsk-[A-Za-z0-9]{16,}\b/,
+];
+const legacyModelPattern = /\bdeepseek-(?:chat|reasoner)\b/i;
+
+function scanDirectory(scanRoot) {
   if (!fs.existsSync(scanRoot)) {
-    continue;
+    return;
   }
   const stack = [scanRoot];
   while (stack.length > 0) {
@@ -62,17 +75,37 @@ for (const scanRoot of scanRoots) {
       continue;
     }
     const content = fs.readFileSync(current, "utf8");
-    if (privateKeyMarkers.some((marker) => content.includes(marker))) {
-      suspiciousFiles.push(path.relative(root, current));
+    const relative = path.relative(root, current);
+    if (
+      privateKeyMarkers.some((marker) => content.includes(marker)) ||
+      secretPatterns.some((pattern) => pattern.test(content))
+    ) {
+      suspiciousFiles.add(relative);
+    }
+    if (legacyModelPattern.test(content)) {
+      legacyModelFiles.add(relative);
     }
   }
 }
 
-if (suspiciousFiles.length > 0) {
+for (const scanRoot of scanRoots) {
+  scanDirectory(scanRoot);
+}
+
+if (suspiciousFiles.size > 0) {
   throw new Error(
-    "Private key material was found in the frontend bundle:\n" +
-      suspiciousFiles.map((file) => `- ${file}`).join("\n"),
+    "Secret-like material was found in source or release artifacts:\n" +
+      [...suspiciousFiles].map((file) => `- ${file}`).join("\n"),
   );
 }
 
-console.log("Release safety checks OK: no tracked or bundled private key material.");
+if (legacyModelFiles.size > 0) {
+  throw new Error(
+    "Retired DeepSeek model identifiers were found in runtime or release files:\n" +
+      [...legacyModelFiles].map((file) => `- ${file}`).join("\n"),
+  );
+}
+
+console.log(
+  "Release safety checks OK: no tracked or bundled secret material, auth header, or retired model identifier.",
+);

@@ -43,6 +43,7 @@ import {
   type CharacterDefinition,
 } from "./characterAssets";
 import { ChatService } from "./chat/chatService";
+import { formatChatBubbleText } from "./chat/chatBubbleText";
 import { InteractionCooldownManager } from "./interactionCooldown";
 import {
   InteractionRewardCooldownManager,
@@ -718,7 +719,7 @@ export class PetRuntime {
 
     const response = await this.chatService.send(event.payload.message);
     if (response) {
-      this.interactionFeedback.triggerMessage(response, "CHAT");
+      this.interactionFeedback.triggerMessage(formatChatBubbleText(response), "CHAT");
     }
   }
 

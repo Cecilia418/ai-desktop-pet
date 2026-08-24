@@ -4,9 +4,29 @@ import { PetRuntime } from "./PetRuntime";
 import { desktopWindowManager } from "../../platform/desktop/windowManager";
 import { PetPersistenceService } from "../../platform/persistence/petPersistenceService";
 import { TauriPetPersistenceRepository } from "../../platform/persistence/petPersistenceRepository";
+import { AIConfigurationService } from "../../platform/ai/aiConfigurationService";
+import {
+  createDefaultAiAdapter,
+} from "../../platform/ai/tauriAiAdapter";
+import { TauriDeepSeekChatProvider, ConfiguredChatProvider } from "./chat/chatProvider";
+import { ChatService } from "./chat/chatService";
 
 export function usePetRuntime(characterId: string) {
   const character = useMemo(() => getCharacterDefinition(characterId), [characterId]);
+  const aiAdapter = useMemo(() => createDefaultAiAdapter(), []);
+  const aiConfiguration = useMemo(
+    () => new AIConfigurationService(aiAdapter),
+    [aiAdapter],
+  );
+  const deepSeekProvider = useMemo(
+    () => new TauriDeepSeekChatProvider(aiAdapter),
+    [aiAdapter],
+  );
+  const chatProvider = useMemo(
+    () => new ConfiguredChatProvider(aiConfiguration, deepSeekProvider),
+    [aiConfiguration, deepSeekProvider],
+  );
+  const chatService = useMemo(() => new ChatService(chatProvider), [chatProvider]);
   const persistenceService = useMemo(
     () => new PetPersistenceService({
       repository: new TauriPetPersistenceRepository(),
@@ -23,8 +43,9 @@ export function usePetRuntime(characterId: string) {
       character,
       windowManager: desktopWindowManager,
       persistenceService,
+      chatService,
     }),
-    [character, persistenceService],
+    [character, chatService, persistenceService],
   );
   const [snapshot, setSnapshot] = useState(runtime.snapshot);
   const [ready, setReady] = useState(false);
@@ -32,6 +53,7 @@ export function usePetRuntime(characterId: string) {
   useEffect(() => {
     const unsubscribe = runtime.subscribe(setSnapshot);
     let active = true;
+    void aiConfiguration.refresh();
     void runtime.initialize().then(() => {
       if (active) {
         setReady(true);
@@ -40,9 +62,12 @@ export function usePetRuntime(characterId: string) {
     return () => {
       active = false;
       unsubscribe();
-      void runtime.shutdown().finally(() => runtime.dispose());
+      void runtime.shutdown().finally(() => {
+        runtime.dispose();
+        aiConfiguration.dispose();
+      });
     };
-  }, [runtime]);
+  }, [aiConfiguration, runtime]);
 
   return {
     runtime,
@@ -50,6 +75,7 @@ export function usePetRuntime(characterId: string) {
     snapshot,
     character,
     speechBubble: runtime.speechBubble,
-    chatService: runtime.chat,
+    chatService,
+    aiConfiguration,
   };
 }

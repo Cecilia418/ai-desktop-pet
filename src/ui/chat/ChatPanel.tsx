@@ -21,6 +21,7 @@ interface ChatPanelProps {
   readonly panelRef: RefObject<HTMLDivElement | null>;
   readonly onEvent: (event: PetInteractionEvent) => void;
   readonly onClose: () => void;
+  readonly onOpenSettings?: () => void;
 }
 
 export function ChatPanel({
@@ -28,6 +29,7 @@ export function ChatPanel({
   panelRef,
   onEvent,
   onClose,
+  onOpenSettings,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -94,9 +96,18 @@ export function ChatPanel({
             <p className="pet-chat-pending">女儿想一想……</p>
           ) : null}
           {snapshot.error ? (
-            <p className="pet-chat-error" role="alert">
-              {snapshot.error}
-            </p>
+            <div className="pet-chat-error" role="alert">
+              <p>{snapshot.error}</p>
+              {snapshot.errorCode === "NOT_CONFIGURED" && onOpenSettings ? (
+                <Button
+                  type="button"
+                  variant="soft"
+                  onClick={onOpenSettings}
+                >
+                  去设置
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <form className="pet-chat-form" onSubmit={submit}>
