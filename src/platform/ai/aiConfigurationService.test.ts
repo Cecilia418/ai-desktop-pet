@@ -92,4 +92,22 @@ describe("AIConfigurationService", () => {
       .toBe("DeepSeek API 余额不足，请充值后再试");
     service.dispose();
   });
+
+  it("survives component cleanup and remount before saving an API key", async () => {
+    const adapter = new FakeAiAdapter();
+    const service = new AIConfigurationService(adapter);
+
+    const firstMountListener = () => undefined;
+    const cleanupFirstMount = service.subscribe(firstMountListener);
+    cleanupFirstMount();
+
+    const secondMountListener = () => undefined;
+    const cleanupSecondMount = service.subscribe(secondMountListener);
+    expect(await service.saveApiKey("remount-key")).toBe(true);
+    expect(adapter.savedKey).toBe("remount-key");
+    expect(service.snapshot.configured).toBe(true);
+
+    cleanupSecondMount();
+    service.dispose();
+  });
 });

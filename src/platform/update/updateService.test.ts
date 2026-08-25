@@ -93,6 +93,56 @@ describe("UpdateService", () => {
     expect(service.snapshot.status).toBe("installing");
   });
 
+  it("publishes the complete available-to-install lifecycle", async () => {
+    const statuses: string[] = [];
+    const available = candidate({
+      download: vi.fn(async (onProgress) => {
+        onProgress({ downloadedBytes: 100, contentLength: 100 });
+      }),
+    });
+    const service = new UpdateService({
+      adapter: adapter({ check: vi.fn(async () => available) }),
+      getCurrentVersion: async () => "0.1.0",
+      prepareForInstall: async () => undefined,
+    });
+    service.subscribe((snapshot) => statuses.push(snapshot.status));
+
+    await service.checkForUpdate();
+    await service.installAvailable();
+
+    expect(statuses).toEqual(expect.arrayContaining([
+      "checking",
+      "available",
+      "downloading",
+      "ready",
+      "installing",
+    ]));
+    expect(available.close).not.toHaveBeenCalled();
+  });
+
+  it("closes a failed update candidate and reports the error without relaunch", async () => {
+    const available = candidate({
+      download: vi.fn(async () => {
+        throw new Error("download failed");
+      }),
+    });
+    const updateAdapter = adapter({ check: vi.fn(async () => available) });
+    const resume = vi.fn();
+    const service = new UpdateService({
+      adapter: updateAdapter,
+      getCurrentVersion: async () => "0.1.0",
+      prepareForInstall: async () => resume,
+    });
+
+    await service.checkForUpdate();
+    await service.installAvailable();
+
+    expect(resume).toHaveBeenCalledOnce();
+    expect(available.close).toHaveBeenCalledOnce();
+    expect(updateAdapter.relaunch).not.toHaveBeenCalled();
+    expect(service.snapshot.status).toBe("error");
+  });
+
   it("does not install when persistence preparation fails", async () => {
     const available = candidate();
     const updateAdapter = adapter({ check: vi.fn(async () => available) });

@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCharacterDefinition } from "./characterAssets";
 import { PetRuntime } from "./PetRuntime";
+import { RuntimeLifecycleCoordinator } from "./runtimeLifecycleCoordinator";
 import { desktopWindowManager } from "../../platform/desktop/windowManager";
 import { PetPersistenceService } from "../../platform/persistence/petPersistenceService";
 import { TauriPetPersistenceRepository } from "../../platform/persistence/petPersistenceRepository";
 import { AIConfigurationService } from "../../platform/ai/aiConfigurationService";
+import { registerApplicationShutdown } from "../../platform/app/applicationLifecycle";
 import {
   createDefaultAiAdapter,
 } from "../../platform/ai/tauriAiAdapter";
@@ -49,9 +51,19 @@ export function usePetRuntime(characterId: string) {
   );
   const [snapshot, setSnapshot] = useState(runtime.snapshot);
   const [ready, setReady] = useState(false);
+  const runtimeLifecycleRef = useRef<RuntimeLifecycleCoordinator<PetRuntime> | null>(null);
+  if (runtimeLifecycleRef.current === null) {
+    runtimeLifecycleRef.current = new RuntimeLifecycleCoordinator<PetRuntime>();
+  }
+  const runtimeLifecycle = runtimeLifecycleRef.current;
 
   useEffect(() => {
     const unsubscribe = runtime.subscribe(setSnapshot);
+    const lease = runtimeLifecycle.claim(runtime);
+    const unregisterApplicationShutdown = registerApplicationShutdown(() => {
+      aiConfiguration.dispose();
+      void runtime.shutdown().finally(() => runtime.dispose());
+    });
     let active = true;
     void aiConfiguration.refresh();
     void runtime.initialize().then(() => {
@@ -62,12 +74,12 @@ export function usePetRuntime(characterId: string) {
     return () => {
       active = false;
       unsubscribe();
-      void runtime.shutdown().finally(() => {
-        runtime.dispose();
-        aiConfiguration.dispose();
+      unregisterApplicationShutdown();
+      runtimeLifecycle.release(lease, (ownedRuntime) => {
+        void ownedRuntime.shutdown();
       });
     };
-  }, [aiConfiguration, runtime]);
+  }, [aiConfiguration, runtime, runtimeLifecycle]);
 
   return {
     runtime,

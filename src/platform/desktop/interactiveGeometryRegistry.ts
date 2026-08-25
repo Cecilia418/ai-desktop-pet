@@ -6,7 +6,8 @@ export type InteractiveGeometryKey =
   | "character"
   | "affordance"
   | "action-menu"
-  | "panel";
+  | "panel"
+  | "update-prompt";
 
 export type GeometryListener = () => void;
 

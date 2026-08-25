@@ -4,6 +4,9 @@ export interface UpdaterBuildEnvironment {
   readonly enabledFlag: string | undefined;
 }
 
+/** Delay the one-shot launch check until the pet has settled on the desktop. */
+export const UPDATE_CHECK_DELAY_MS = 15_000;
+
 export function isProductionUpdaterEnabled({
   dev,
   production,

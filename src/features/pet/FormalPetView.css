@@ -327,6 +327,68 @@
   height: var(--pet-content-height);
 }
 
+.pet-update-prompt-shell {
+  position: absolute;
+  top: var(--pet-content-top);
+  left: var(--pet-content-left);
+  z-index: 11;
+  width: var(--pet-content-width);
+  pointer-events: auto;
+}
+
+.pet-update-prompt {
+  display: grid;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
+  animation: pet-panel-in var(--motion-medium) ease-out both;
+}
+
+.pet-update-prompt__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.pet-update-prompt__eyebrow {
+  display: block;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.pet-update-prompt h2 {
+  margin: 2px 0 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+}
+
+.pet-update-prompt__versions,
+.pet-update-prompt__notes {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.pet-update-prompt__notes {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.pet-update-prompt__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+.pet-update-prompt__actions .ui-button {
+  min-height: 30px;
+  padding-inline: 9px;
+  font-size: var(--font-size-xs);
+}
+
 .pet-panel-shell > .ui-panel {
   width: 100%;
   height: 100%;

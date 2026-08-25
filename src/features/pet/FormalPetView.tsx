@@ -40,12 +40,14 @@ import { FeedPanel } from "../../ui/feeding/FeedPanel";
 import { ChatPanel } from "../../ui/chat/ChatPanel";
 import { getAppVersion } from "../../platform/update/appVersion";
 import { createDefaultUpdateAdapter } from "../../platform/update/tauriUpdateAdapter";
+import { UPDATE_CHECK_DELAY_MS } from "../../platform/update/updateConfig";
 import { UpdateService } from "../../platform/update/updateService";
 import type { AiConfigurationSnapshot } from "../../platform/ai/aiTypes";
 import type {
   ResumeAfterUpdatePreparation,
   UpdateSnapshot,
 } from "../../platform/update/updateTypes";
+import { UpdatePrompt } from "../../ui/update/UpdatePrompt";
 import "./FormalPetView.css";
 
 interface FormalPetViewProps {
@@ -85,11 +87,14 @@ export function FormalPetView({
   const [panelSnapshot, setPanelSnapshot] = useState(
     () => ({ activePanel: null } as { activePanel: ActivePanel }),
   );
+  const [updatePromptVisible, setUpdatePromptVisible] = useState(false);
 
   const characterRef = useRef<HTMLButtonElement>(null);
   const affordanceRef = useRef<HTMLButtonElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const updatePromptRef = useRef<HTMLDivElement>(null);
+  const updatePromptDismissedRef = useRef(false);
 
   const displayMetrics = useMemo(() => deriveCharacterDisplayMetrics(), []);
   const layoutSpecs = useMemo(() => derivePetWindowLayoutSpecs(), []);
@@ -131,6 +136,11 @@ export function FormalPetView({
   const [updateSnapshot, setUpdateSnapshot] = useState<UpdateSnapshot>(
     updateService.snapshot,
   );
+
+  const dismissUpdatePrompt = useCallback(() => {
+    updatePromptDismissedRef.current = true;
+    setUpdatePromptVisible(false);
+  }, []);
 
   const closeActionMenu = useCallback(() => {
     affordanceController.setActionMenuOpen(false);
@@ -237,13 +247,33 @@ export function FormalPetView({
     [layoutCoordinator, runtime],
   );
 
+  const closeChat = useCallback(() => {
+    dispatchInteraction(
+      createPetInteractionEvent({
+        type: "CHAT_CLOSE",
+        source: "pointer",
+        payload: { kind: "empty" },
+      }),
+    );
+    panelCoordinator.close();
+  }, [dispatchInteraction, panelCoordinator]);
+
   const prepareForUpdate = useCallback(async () => {
     if (runtime.snapshot.interaction.activeInteraction === "DRAG") {
       throw new Error("正在拖动桌面女儿，请稍后再更新");
     }
 
+    dismissUpdatePrompt();
     closeActionMenu();
-    panelCoordinator.close();
+    if (
+      panelSnapshot.activePanel === "chat" ||
+      chatSnapshot.isOpen ||
+      chatSnapshot.pending
+    ) {
+      closeChat();
+    } else {
+      panelCoordinator.close();
+    }
     runtime.setPresentationActive(false);
     runtime.setMovementPaused(true, true);
     layoutCoordinator.invalidatePendingTransition();
@@ -261,8 +291,13 @@ export function FormalPetView({
     }
   }, [
     closeActionMenu,
+    closeChat,
+    chatSnapshot.isOpen,
+    chatSnapshot.pending,
+    dismissUpdatePrompt,
     layoutCoordinator,
     panelCoordinator,
+    panelSnapshot.activePanel,
     runtime,
     transitionWindow,
   ]);
@@ -270,23 +305,13 @@ export function FormalPetView({
 
   const openPanel = useCallback(
     (panel: Exclude<ActivePanel, null>) => {
+      dismissUpdatePrompt();
       closeActionMenu();
       runtime.setPresentationActive(true);
       panelCoordinator.open(panel);
     },
-    [closeActionMenu, panelCoordinator, runtime],
+    [closeActionMenu, dismissUpdatePrompt, panelCoordinator, runtime],
   );
-
-  const closeChat = useCallback(() => {
-    dispatchInteraction(
-      createPetInteractionEvent({
-        type: "CHAT_CLOSE",
-        source: "pointer",
-        payload: { kind: "empty" },
-      }),
-    );
-    panelCoordinator.close();
-  }, [dispatchInteraction, panelCoordinator]);
 
   const openSettingsFromChat = useCallback(() => {
     closeChat();
@@ -310,6 +335,7 @@ export function FormalPetView({
     if (import.meta.env.DEV) {
       console.debug("UI hide requested");
     }
+    dismissUpdatePrompt();
     closeActionMenu();
     panelCoordinator.close();
     layoutCoordinator.invalidatePendingTransition();
@@ -324,7 +350,18 @@ export function FormalPetView({
       setWindowVisible(true);
       setWindowError("暂时无法隐藏窗口");
     }
-  }, [closeActionMenu, layoutCoordinator, panelCoordinator, runtime]);
+  }, [
+    closeActionMenu,
+    dismissUpdatePrompt,
+    layoutCoordinator,
+    panelCoordinator,
+    runtime,
+  ]);
+
+  const installUpdate = useCallback(() => {
+    dismissUpdatePrompt();
+    void updateService.installAvailable();
+  }, [dismissUpdatePrompt, updateService]);
 
   const handleAction = useCallback(
     (action: PetAction) => {
@@ -420,9 +457,11 @@ export function FormalPetView({
 
   useEffect(() => {
     runtime.setPresentationActive(
-      actionMenuOpen || panelSnapshot.activePanel !== null,
+      actionMenuOpen ||
+        updatePromptVisible ||
+        panelSnapshot.activePanel !== null,
     );
-  }, [actionMenuOpen, panelSnapshot.activePanel, runtime]);
+  }, [actionMenuOpen, panelSnapshot.activePanel, runtime, updatePromptVisible]);
 
   useEffect(() => {
     if (!ready || !windowVisible) {
@@ -434,13 +473,16 @@ export function FormalPetView({
         ? "compact-panel"
         : actionMenuOpen
           ? "action-menu"
-          : "pet-only";
+          : updatePromptVisible
+            ? "compact-panel"
+            : "pet-only";
     void transitionWindow(nextMode);
   }, [
     actionMenuOpen,
     panelSnapshot.activePanel,
     ready,
     transitionWindow,
+    updatePromptVisible,
     windowVisible,
   ]);
 
@@ -459,6 +501,10 @@ export function FormalPetView({
         "panel",
         panelSnapshot.activePanel ? panelRef.current : null,
       ),
+      geometryRegistry.register(
+        "update-prompt",
+        updatePromptVisible ? updatePromptRef.current : null,
+      ),
     ];
     geometryRegistry.refresh();
     return () => unregister.forEach((remove) => remove());
@@ -466,6 +512,10 @@ export function FormalPetView({
     actionAffordanceVisible,
     actionMenuOpen,
     actionMenuOverflowOpen,
+    updatePromptVisible,
+    updateSnapshot.availableVersion,
+    updateSnapshot.currentVersion,
+    updateSnapshot.notes,
     chatSnapshot.error,
     chatSnapshot.messages.length,
     chatSnapshot.pending,
@@ -540,12 +590,24 @@ export function FormalPetView({
   }, [updateService]);
 
   useEffect(() => {
+    if (updateSnapshot.status !== "available") {
+      updatePromptDismissedRef.current = false;
+      setUpdatePromptVisible(false);
+      return;
+    }
+    if (ready && windowVisible && !updatePromptDismissedRef.current) {
+      closeActionMenu();
+      setUpdatePromptVisible(true);
+    }
+  }, [closeActionMenu, ready, updateSnapshot.status, windowVisible]);
+
+  useEffect(() => {
     if (!ready) {
       return;
     }
     const timer = globalThis.setTimeout(() => {
       void updateService.checkForUpdate();
-    }, 3_500);
+    }, UPDATE_CHECK_DELAY_MS);
     return () => globalThis.clearTimeout(timer);
   }, [ready, updateService]);
 
@@ -575,6 +637,7 @@ export function FormalPetView({
         if (!visible) {
           layoutCoordinator.invalidatePendingTransition();
           setLayoutTransitioning(false);
+          dismissUpdatePrompt();
           closeActionMenu();
           panelCoordinator.close();
           runtime.setWindowVisible(false);
@@ -597,7 +660,13 @@ export function FormalPetView({
       cancelled = true;
       unlisten?.();
     };
-  }, [closeActionMenu, layoutCoordinator, panelCoordinator, runtime]);
+  }, [
+    closeActionMenu,
+    dismissUpdatePrompt,
+    layoutCoordinator,
+    panelCoordinator,
+    runtime,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -822,6 +891,7 @@ export function FormalPetView({
             if (actionMenuOpen) {
               closeActionMenu();
             } else {
+              dismissUpdatePrompt();
               affordanceController.setActionMenuOpen(true);
               runtime.setPresentationActive(true);
               setActionMenuOpen(true);
@@ -859,7 +929,7 @@ export function FormalPetView({
             onClose={handlePanelClose}
             updateSnapshot={updateSnapshot}
             onCheckUpdate={() => void updateService.checkForUpdate()}
-            onInstallUpdate={() => void updateService.installAvailable()}
+            onInstallUpdate={installUpdate}
             aiSnapshot={aiConfigurationSnapshot}
             onSaveAiKey={saveAiKey}
             onDeleteAiKey={deleteAiKey}
@@ -873,6 +943,14 @@ export function FormalPetView({
             onEvent={dispatchInteraction}
             onClose={closeChat}
             onOpenSettings={openSettingsFromChat}
+          />
+        ) : null}
+        {updatePromptVisible && updateSnapshot.status === "available" ? (
+          <UpdatePrompt
+            promptRef={updatePromptRef}
+            snapshot={updateSnapshot}
+            onInstall={installUpdate}
+            onDismiss={dismissUpdatePrompt}
           />
         ) : null}
 
